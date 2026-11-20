@@ -4,6 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>פנקס פעולות</title>
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icon-192.png">
 <meta name="theme-color" content="#a63d63">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -132,7 +134,8 @@ const ROLE = {led:'הובלתי', part:'השתתפתי'};
 
 let entries = [], editing = null;
 try { entries = JSON.parse(localStorage.getItem(KEY)) || []; } catch { entries = []; }
-navigator.storage?.persist?.(); // ask the browser not to evict our data
+navigator.storage?.persist?.();
+navigator.serviceWorker?.register('sw.js').catch(() => {}); // offline support // ask the browser not to evict our data
 
 function save() {
   try { localStorage.setItem(KEY, JSON.stringify(entries)); return true; }
