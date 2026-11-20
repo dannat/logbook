@@ -105,7 +105,7 @@ details{margin-top:12px}summary{color:var(--accent);font-size:14px;cursor:pointe
 
 <dialog id="bk">
   <h3>גיבוי וייצוא</h3>
-  <p class="note">המידע שמור רק בטלפון הזה. מחיקת נתוני הדפדפן או החלפת טלפון מוחקת אותו, לכן כדאי לשמור קובץ גיבוי מדי פעם.</p>
+  <p class="note">המידע שמור רק בטלפון הזה. פעם ביום, בשמירת הפעולה הראשונה, נשמר אוטומטית קובץ גיבוי בתיקיית ההורדות. לפני החלפת טלפון יש להעתיק את הקובץ האחרון למקום אחר.</p>
   <div class="stack">
     <button class="p" id="expJson">שמירת קובץ גיבוי</button>
     <button class="g" id="expCsv">ייצוא טבלה (Excel / CSV)</button>
@@ -125,7 +125,7 @@ const CATS = [
   {id:'1.5.1', name:'ניתוח קיסרי ראשון', req:25},
   {id:'1.5.2', name:'ניתוח קיסרי חוזר', req:25},
 ];
-const KEY = 'logbook.v1', BK = 'logbook.backedUp';
+const KEY = 'logbook.v1', BKD = 'logbook.backupDate';
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const today = () => { const d = new Date(); d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); return d.toISOString().slice(0,10); };
@@ -151,7 +151,8 @@ function summarize(list) {
 
 function render() {
   const s = summarize(entries);
-  $('total').textContent = entries.length + ' פעולות';
+  const bd = localStorage.getItem(BKD);
+  $('total').textContent = entries.length + ' פעולות · גיבוי: ' + (bd ? (bd === today() ? 'היום' : heDate(bd)) : 'עוד לא');
   $('cats').innerHTML = CATS.map(c => {
     const {led, part} = s[c.id], n = led + part, pct = x => Math.min(100, x / c.req * 100);
     return `<button class="cat ${n >= c.req ? 'done' : ''}" data-cat="${c.id}">
@@ -169,8 +170,6 @@ function render() {
       <span class="s">${sub}</span>${e.note ? `<span class="s">${esc(e.note)}</span>` : ''}</button>`;
   }).join('') : '<div class="empty">עדיין אין פעולות. לחצי על כרטיס כדי להוסיף את הראשונה.</div>';
   $('atts').innerHTML = [...new Set(entries.map(e => e.attending).filter(Boolean))].map(a => `<option value="${esc(a)}">`).join('');
-  const pending = entries.length - (+localStorage.getItem(BK) || 0);
-  $('bkBtn').textContent = pending >= 10 ? `גיבוי (${pending} חדשות)` : 'גיבוי';
 }
 
 function openForm(e, catId) {
@@ -195,7 +194,7 @@ $('addBtn').onclick = () => openForm();
 $('cancelBtn').onclick = () => $('dlg').close();
 $('delBtn').onclick = () => {
   if (!confirm('למחוק את הפעולה?')) return;
-  entries = entries.filter(e => e !== editing); if (save()) { $('dlg').close(); render(); }
+  entries = entries.filter(e => e !== editing); if (save()) { $('dlg').close(); autoBackup(); render(); }
 };
 $('f').onsubmit = ev => {
   ev.preventDefault();
@@ -203,7 +202,7 @@ $('f').onsubmit = ev => {
     attending:$('att').value.trim(), pid:$('pid').value.trim(), tIn:$('tIn').value, tStart:$('tStart').value, note:$('note').value.trim()};
   if (editing) Object.assign(editing, data); else entries.push({id: Date.now(), ...data});
   if (data.attending) localStorage.setItem('logbook.lastAtt', data.attending);
-  if (save()) { $('dlg').close(); render(); }
+  if (save()) { $('dlg').close(); autoBackup(); render(); }
 };
 
 // Backup
@@ -214,10 +213,14 @@ function download(name, text, type) {
 }
 $('bkBtn').onclick = () => { $('msg').textContent = ''; $('bk').showModal(); };
 $('bkClose').onclick = () => $('bk').close();
-$('expJson').onclick = () => {
+function backup() {
   download(`logbook-${today()}.json`, JSON.stringify(entries, null, 1), 'application/json');
-  localStorage.setItem(BK, entries.length); render(); $('msg').textContent = 'קובץ הגיבוי נשמר בהורדות.';
-};
+  localStorage.setItem(BKD, today());
+}
+// Daily local backup: the first change of each day also drops a backup file into the phone's Downloads.
+// ponytail: runs on save (needs a user tap to be allowed to download), not on a timer; one small file per active day.
+const autoBackup = () => { if (entries.length && localStorage.getItem(BKD) !== today()) backup(); };
+$('expJson').onclick = () => { backup(); render(); $('msg').textContent = 'קובץ הגיבוי נשמר בהורדות.'; };
 $('expCsv').onclick = () => {
   const q = v => '"' + String(v ?? '').replace(/"/g, '""') + '"';
   const rows = [['סעיף','פעולה','תפקיד','תאריך','שם המטופלת','ת"ז','רופא/ה בכיר/ה','כניסה לחדר ניתוח','התחלת ניתוח','הערה'],
