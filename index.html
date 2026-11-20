@@ -108,9 +108,10 @@ details{margin-top:12px}summary{color:var(--accent);font-size:14px;cursor:pointe
   <p class="note">המידע שמור רק בטלפון הזה. פעם ביום, בשמירת הפעולה הראשונה, נשמר אוטומטית קובץ גיבוי בתיקיית ההורדות. לפני החלפת טלפון יש להעתיק את הקובץ האחרון למקום אחר.</p>
   <div class="stack">
     <button class="p" id="expJson">שמירת קובץ גיבוי</button>
+    <button class="g" id="expDrive">גיבוי מוצפן ל-Drive</button>
     <button class="g" id="expCsv">ייצוא טבלה (Excel / CSV)</button>
     <button class="g" id="impBtn">שחזור מקובץ גיבוי</button>
-    <input type="file" id="impFile" accept=".json,application/json" hidden>
+    <input type="file" id="impFile" accept=".json,.txt,application/json,text/plain" hidden>
     <button class="g" id="bkClose">סגירה</button>
   </div>
   <div id="msg"></div>
@@ -125,7 +126,7 @@ const CATS = [
   {id:'1.5.1', name:'ניתוח קיסרי ראשון', req:25},
   {id:'1.5.2', name:'ניתוח קיסרי חוזר', req:25},
 ];
-const KEY = 'logbook.v1', BKD = 'logbook.backupDate';
+const KEY = 'logbook.v1', BKD = 'logbook.backupDate', DRV = 'logbook.driveDate', PW = 'logbook.backupPw';
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const today = () => { const d = new Date(); d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); return d.toISOString().slice(0,10); };
@@ -153,6 +154,8 @@ function render() {
   const s = summarize(entries);
   const bd = localStorage.getItem(BKD);
   $('total').textContent = entries.length + ' פעולות · גיבוי: ' + (bd ? (bd === today() ? 'היום' : heDate(bd)) : 'עוד לא');
+  const dd = localStorage.getItem(DRV);
+  $('bkBtn').textContent = dd && dd !== today() && entries.length ? 'גיבוי ●' : 'גיבוי'; // dot = Drive copy is older than today
   $('cats').innerHTML = CATS.map(c => {
     const {led, part} = s[c.id], n = led + part, pct = x => Math.min(100, x / c.req * 100);
     return `<button class="cat ${n >= c.req ? 'done' : ''}" data-cat="${c.id}">
@@ -221,6 +224,37 @@ function backup() {
 // ponytail: runs on save (needs a user tap to be allowed to download), not on a timer; one small file per active day.
 const autoBackup = () => { if (entries.length && localStorage.getItem(BKD) !== today()) backup(); };
 $('expJson').onclick = () => { backup(); render(); $('msg').textContent = 'קובץ הגיבוי נשמר בהורדות.'; };
+// Encrypted off-phone copy: AES-GCM with a key derived from her password, so Drive only ever holds ciphertext.
+const b64 = buf => { let t = ''; for (const b of new Uint8Array(buf)) t += String.fromCharCode(b); return btoa(t); };
+const unb64 = t => Uint8Array.from(atob(t), c => c.charCodeAt(0));
+async function keyFrom(pw, salt) {
+  const k = await crypto.subtle.importKey('raw', new TextEncoder().encode(pw), 'PBKDF2', false, ['deriveKey']);
+  return crypto.subtle.deriveKey({name:'PBKDF2', salt, iterations:200000, hash:'SHA-256'}, k, {name:'AES-GCM', length:256}, false, ['encrypt', 'decrypt']);
+}
+async function encrypt(text, pw) {
+  const salt = crypto.getRandomValues(new Uint8Array(16)), iv = crypto.getRandomValues(new Uint8Array(12));
+  const data = await crypto.subtle.encrypt({name:'AES-GCM', iv}, await keyFrom(pw, salt), new TextEncoder().encode(text));
+  return JSON.stringify({logbook:1, salt:b64(salt), iv:b64(iv), data:b64(data)});
+}
+async function decrypt(o, pw) {
+  return new TextDecoder().decode(await crypto.subtle.decrypt({name:'AES-GCM', iv:unb64(o.iv)}, await keyFrom(pw, unb64(o.salt)), unb64(o.data)));
+}
+$('expDrive').onclick = async () => {
+  const m = $('msg'); let pw = localStorage.getItem(PW);
+  if (!pw) { // separate tap from the share itself: the share sheet only opens right after a tap
+    pw = prompt('בחרי סיסמה לגיבוי (6 תווים לפחות). בלי הסיסמה לא ניתן לשחזר את הגיבוי, אז כתבי אותה במקום בטוח.');
+    if (!pw) return;
+    if (pw.length < 6) { m.textContent = 'הסיסמה קצרה מדי.'; return; }
+    localStorage.setItem(PW, pw); m.textContent = 'הסיסמה נשמרה. לחצי שוב על "גיבוי מוצפן ל-Drive".'; return;
+  }
+  const name = `logbook-${today()}.encrypted.txt`, body = await encrypt(JSON.stringify(entries), pw);
+  const file = new File([body], name, {type:'text/plain'}); // .txt: the share sheet refuses .json
+  try {
+    if (navigator.canShare?.({files:[file]})) { await navigator.share({files:[file], title:'גיבוי פנקס פעולות'}); m.textContent = 'הקובץ המוצפן נשלח לאפליקציה שבחרת.'; }
+    else { download(name, body, 'text/plain'); m.textContent = 'הדפדפן לא תומך בשיתוף. הקובץ המוצפן נשמר בהורדות, אפשר להעלות אותו ל-Drive ידנית.'; }
+    localStorage.setItem(DRV, today()); render();
+  } catch (e) { m.textContent = e.name === 'AbortError' ? 'השיתוף בוטל.' : 'השיתוף נכשל: ' + e.message; }
+};
 $('expCsv').onclick = () => {
   const q = v => '"' + String(v ?? '').replace(/"/g, '""') + '"';
   const rows = [['סעיף','פעולה','תפקיד','תאריך','שם המטופלת','ת"ז','רופא/ה בכיר/ה','כניסה לחדר ניתוח','התחלת ניתוח','הערה'],
@@ -231,12 +265,16 @@ $('expCsv').onclick = () => {
 $('impBtn').onclick = () => $('impFile').click();
 $('impFile').onchange = async ev => {
   try {
-    const inc = JSON.parse(await ev.target.files[0].text());
+    let inc = JSON.parse(await ev.target.files[0].text());
+    if (inc.logbook && inc.data) { // encrypted backup: try the saved password, then ask
+      const saved = localStorage.getItem(PW);
+      inc = JSON.parse(await decrypt(inc, saved).catch(() => decrypt(inc, prompt('סיסמת הגיבוי:') || '')));
+    }
     if (!Array.isArray(inc) || inc.some(e => !e.id || !e.cat || !e.date)) throw 0;
     const have = new Set(entries.map(e => e.id)), add = inc.filter(e => !have.has(e.id)); // merge, never overwrite
     entries.push(...add);
     if (save()) { render(); $('msg').textContent = `שוחזרו ${add.length} פעולות.`; }
-  } catch { $('msg').textContent = 'הקובץ אינו קובץ גיבוי תקין.'; }
+  } catch { $('msg').textContent = 'הקובץ אינו קובץ גיבוי תקין, או שהסיסמה שגויה.'; }
   ev.target.value = '';
 };
 
@@ -282,6 +320,10 @@ if (location.hash === '#test') {
   const p = parseSticker('| מז 03964875-4שם ישראלה ישראלי +\nאב 03964875-3 טל 054-1234567'), q = parseSticker('מז:3964875-3');
   console.assert(p.pid === '039648753' && p.name === 'ישראלה ישראלי' && !validId('039648754'), 'sticker parse broken');
   console.assert(q.pid === '39648753' && validId(q.pid) && parseSticker('מ.ז 2345678-2').lead === '1' && validId('123456782'), 'id repair broken');
+  encrypt('שלום', 'pw123456').then(async c => {
+    const ok = await decrypt(JSON.parse(c), 'pw123456') === 'שלום', bad = await decrypt(JSON.parse(c), 'wrong').then(() => true, () => false);
+    console.assert(ok && !bad && !c.includes('שלום'), 'encryption broken'); console.log('crypto check done');
+  });
   console.log('self-check done');
 }
 render();
